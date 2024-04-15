@@ -1,0 +1,291 @@
+---
+title: "Projet 2"
+output: html_notebook
+---
+
+Amaury BODIN et Vincent BERNARD
+
+Résumé : Pour le projet 2, axé sur un niveau intermédiaire d'analyse factorielle discriminante (AFD), vous travaillerez avec un ensemble de données Twitter Entity Sentiment Analysis. Cet ensemble de données se compose de tweets associés à diverses entités et du sentiment exprimé à l'égard de ces entités. L'AFD peut être appliquée pour réduire la dimensionnalité des données et pour visualiser la manière dont les tweets se regroupent autour des sentiments. Objectif principal : Utiliser l'analyse factorielle discriminante (AFD) pour réduire les dimensions des données des tweets et visualiser le regroupement des sentiments. Source des données : jeu de données Twitter Entity Sentiment Analysis (Kaggle)
+
+Nettoyage de environment ainsi que installation des packages nécessaires.
+
+```{r}
+rm(list = ls())
+```
+
+Il faut installer les différents packages s'ils ne le sont pas sur la machine. Puis les charger en utilisant library().
+
+```{r}
+#install.packages("kableExtra")
+#install.packages("e1071")
+#install.packages("ggplot2")
+```
+
+On importe le package kableExtra pour avoir une belle manière, une manière uniforme de présenter les tableaux dans ce RMarkdown.
+
+On utilisera le package 'e1071' pour avoir accès à des fonctions de classification bayesienne.
+
+On importe le package ggplot, au cas où on aurait besoin d'afficher des données, des graphes dans ce rapport.
+
+```{r}
+library(kableExtra)  
+library('e1071')
+library(ggplot2)
+```
+
+1 - Chargement des données de Kaggle. On charge les datasets et on définit le nom des colonnes que l'on souhaite pour avoir une uniformité dans les 2 datasets.
+
+```{r}
+col_names = c("tweetID", "entity", "sentiment","content")
+```
+
+```{r}
+data_train = read.csv("twitter_training.csv", header = TRUE,col.names = col_names)
+data_valid = read.csv("twitter_validation.csv", header = TRUE,col.names = col_names)
+```
+
+On visualise le début du tataset pour voir à quoi il ressemble et voir quel genre de données nous allons traiter.
+
+```{r}
+head(data_train) %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+Avec la fonction summary(), on récupère d'autres informations comme le nombre de lignes du tableau. Et les types de chaque colonnes.
+
+```{r}
+summary(data_train)
+```
+
+Nettoyages des données textuelles du tweet en supprimant les caractères spéciaux, les URL et les mots vides
+
+```{r}
+install.packages('topicmodels')
+```
+
+Il faut installer les packages qui ne sont pas présents sur la machine.
+
+```{r}
+#install.packages(c("tm", "quanteda", "text", "stringr", "topicmodels", "MASS"))
+```
+
+```{r}
+library(tm)
+library(quanteda)
+library(text)
+library(stringr)
+library(topicmodels)
+library(MASS)
+```
+
+Fonction qui va nous permettre de nettoyer les deux datasets.
+
+Dans un premier temps on remplace tous les caractères spéciaux et la ponctuation par un espace. On gardeuniquement les lettres et les chiffres. On remplace toutes les chaines qui ressemblent à un URL par une chaine vide. On convertit toutes les lettres majuscules en minuscules.
+
+Pour faire en sorte que par exemple : 'English' devienne 'english', c'est la même chose mais la machine les considèrerait comme des mots différents. Ensuite, comme dans le projet_1, on retire les mots trop communs comme "the", "this", ... car ils n'apportent rien à l'étude. Ils peuvent être présent dans n'importe quel type de phrase.
+
+```{r}
+clean_tweet <- function(tweet) {
+  tweet <- gsub("[^a-zA-Z0-9\\s]", " 
+", tweet)
+  tweet <- gsub("http\\S+|www\\S+|https\\S+", "", tweet, perl = TRUE)
+  tweet <- tolower(tweet)
+  tweet <- removeWords(tweet, stopwords("english"))
+  return(tweet)
+}
+```
+
+On nettoie donc les 2 dataset avec la fonction qui à été crée juste au dessus.
+
+```{r}
+data_train$content <- sapply(data_train$content, clean_tweet)
+data_valid$content <- sapply(data_valid$content, clean_tweet)
+```
+
+Ci dessous, on visualise les datasets, data_train et data_valid :
+
+```{r}
+data_train %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+```{r}
+data_valid %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On cherche le nombre de sentiments sur lesquels nous allons travailler.
+
+```{r}
+unique(data_train$sentiment)
+```
+
+On cherche le nombre d'exemple qu'il y a par sentiment. On peut voir que le nombre d'exemples est assez deséquilibré : Irrelevent : 12 990, Negative : 22 542, Neutral : 18 318 et Positive : 20 831
+
+```{r}
+table(data_train$sentiment)
+```
+
+Convertir les étiquettes de sentiment dans un format numérique adapté à DFA.
+
+```{r}
+data_train$Code_Sentiment <- as.numeric(factor(data_train$sentiment))
+data_valid$Code_Sentiment <- as.numeric(factor(data_valid$sentiment))
+```
+
+Une nouvelle fois on affiche les 2 dataset pour s'assurer que les nouvelles colonnes crées apparaissent correctement :
+
+```{r}
+data_train %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+```{r}
+data_valid %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On peut voir au-dessus que même après le prétraitement effectué, nous avons encore des mots qui n'ont aucun sens ou même la préscence de speudonymes. Sur twitter, les utilisateurs peuvent aussi parler avec des abréviations. Ce qui peut aussi rendre difficile l'étude.
+
+2 - Extraction des caractéristiques à l'aide de TF-IDF
+
+Ce code extrait des caractéristiques à partir de données textuelles de tweets en utilisant la méthode TF-IDF. Il commence par échantillonner aléatoirement 10 000 tweets à partir de l'ensemble de données complet. Ensuite, il crée une matrice document-feature avec TF-IDF à l'aide de la bibliothèque **`quanteda`**. Cette matrice représente la fréquence des termes dans chaque tweet, ajustée en fonction de leur importance relative dans l'ensemble des tweets. Les caractéristiques extraites sont ensuite ajoutées au jeu de données initial, fournissant une représentation numérique des tweets pour des analyses ultérieures. Enfin, les premières lignes du jeu de données enrichi sont affichées pour inspection.
+
+Ici, si on utilise plus de 10 000 lignes Rstudio crash car la mémoire vive utilisée est supérieur à celle disponible (mon pc a 16 go de Ram), on pense que c'est un problème lié a Rstudio.
+
+On fixe une seed pour qu'a chaque fois qu'on fait cela, on ait les mêmes conditions initiales. On génère un échantillons aléatoire de 5 000 indices parmis toutes les lignes présentes dans le dataframe. Puis avec ces indices récupérés, on créé un nouveau dataframe sur lequel nous allons travailler.
+
+```{r}
+set.seed(123)
+indices_echantillon = sample(nrow(data_train), size = 5000) 
+data_train_echantillon = data_train[indices_echantillon, ]
+```
+
+On créé un object de type corpus à partir du contenus des tweets du nouveau dataframe que nous avons créé juste avant.
+
+On récupère les tokens (les mots) du corpus. Ensuite, on crée une matrice de fréquence du document à partir des tokens qui nous avons récupéré juste avant. A partir de cela, on transforme la DFM en une DFM pondérée. Elle évalue l'importance d'un mots par rapport à sa fréquence globale dans le corpus.
+
+Cette techinque permet de mettre en avant les termes qui sont fréquents dans un document mais qui ne le sont pas dans le reste du corpus.
+
+Pour finir, dans les lignes de code ci-dessous. On créé un nouveau dataframe qui combine le 'Code_sentiment' avec 'data_train_echantillon'. Chaque colonne représente un terme pondéré par Tf-IDF.
+
+```{r}
+corpus <- corpus(data_train_echantillon$content)
+
+tokens <- tokens(corpus)
+dfm <- dfm(tokens)
+dfm_tfidf <- dfm_tfidf(dfm)
+
+df_tfidf <- cbind(Code_Sentiment = data_train_echantillon$Code_Sentiment, as.data.frame(as.matrix(dfm_tfidf)))
+
+df_tfidf %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On fait la même chose que précédemment sauf qu'on le fait cette fois sur le dataset 'data_valid'
+
+```{r}
+corpus_valid <- corpus(data_valid$content)
+tokens_valid <- tokens(corpus_valid)
+dfm_valid <- dfm(tokens_valid)
+dfm_tfidf_valid <- dfm_tfidf(dfm_valid)
+
+df_tfidf_valid <- cbind(Code_Sentiment = data_valid$Code_Sentiment, as.data.frame(as.matrix(dfm_tfidf_valid)))
+```
+
+ATTENTION 15 min de run avec cela !!!
+
+On va maintenant supprimer les variables constantes du jeu de données d'entraînement (df_tfidf) et du jeu de données de validation (df_tfidf_valid). L'élimination de ces variables constantes peut améliorer les performances des modèles en réduisant la complexité inutile du jeu de données.
+
+```{r}
+library(caret)
+
+df_tfidf_train_clean <- df_tfidf[, -nearZeroVar(df_tfidf)]
+df_tfidf_valid_clean <- df_tfidf_valid[, -nearZeroVar(df_tfidf_valid)]
+```
+
+Ce code utilise l'analyse en composantes principales (PCA) pour réduire la dimension des données d'entraînement nettoyées (df_tfidf_train_clean). Ensuite, il applique l'analyse factorielle discriminante (AFD) sur les composantes principales obtenues pour projeter les données dans un espace de dimension inférieure en maximisant la séparation entre les classes de sentiment.
+
+```{r}
+#utiliser le modèle PCA pour réduire la dimension des données d'entraînement
+pca_result_train <- prcomp(df_tfidf_train_clean[, -1], scale. = TRUE)
+
+#application de AFD
+lda_result_train <- lda(data.frame(pca_result_train$x), df_tfidf_train_clean$Code_Sentiment)
+```
+
+```{r}
+lda_data_train <- as.data.frame(predict(lda_result_train)$x)
+lda_data_train$Code_Sentiment <- as.factor(df_tfidf_train_clean$Code_Sentiment)
+```
+
+Visualiation du modèle avec les données d'entrainement .
+
+La visualisation des résultats de l'AFD pour le jeu de données d'entraînement permet d'observer graphiquement comment les tweets sont regroupés dans l'espace réduit créé par l'analyse factorielle discriminante (AFD). Chaque point représente un tweet, coloré en fonction de sa classe de sentiment. L'objectif est de vérifier visuellement si les groupes de tweets associés à des sentiments différents sont séparés les uns des autres dans cet espace. Une séparation nette suggère que l'AFD a réussi à capturer les différences entre les classes de sentiment, tandis qu'une dispersion importante pourrait indiquer une plus grande ambiguïté dans la classification.
+
+```{r}
+ggplot(lda_data_train, aes(x = LD1, y = LD2, color = Code_Sentiment)) +
+  geom_point() +
+  ggtitle("Visualisation des résultats de l'AFD pour le jeu de données d'entraînement") +
+  xlab("Dimension 1") +
+  ylab("Dimension 2") +
+  theme_minimal()
+```
+
+On utilise maintenant le modèle d'Analyse Factorielle Discriminante (AFD) entraîné sur les données d'entraînement pour effectuer des prédictions sur le jeu de données de validation (data_valid). Avant cela, il applique également une transformation PCA sur les données de validation nettoyées pour réduire les dimensions. Les résultats de l'AFD sont ensuite visualisés dans un nouveau DataFrame (lda_data_valid), facilitant l'évaluation de l'efficacité du modèle sur le jeu de données de validation.
+
+```{r}
+pca_result_valid <- predict(pca_result_train, newdata = df_tfidf_valid_clean[, -1])
+
+lda_result_valid <- predict(lda_result_train, newdata = as.data.frame(pca_result_valid))
+
+lda_data_valid <- as.data.frame(lda_result_valid$x)
+lda_data_valid$Code_Sentiment <- as.factor(df_tfidf_valid_clean$Code_Sentiment)
+```
+
+```{r}
+ggplot(lda_data_valid, aes(x = LD1, y = LD2, color = Code_Sentiment)) +
+  geom_point() +
+  ggtitle("Visualisation des résultats de l'AFD pour le jeu de données de validation") +
+  xlab("Dimension 1 (PCA)") +
+  ylab("Dimension 2 (PCA)") +
+  theme_minimal()
+```
+
+La dispersion des points dans la visualisation des résultats de l'AFD pour le jeu de données de validation suggère une faible séparation linéaire entre les classes de sentiment. Cela peut indiquer que le modèle d'Analyse Factorielle Discriminante (AFD) peut avoir des difficultés à discriminer efficacement entre les différentes catégories de sentiment dans les données de validation. Une dispersion importante peut refléter la complexité ou l'absence de motifs linéaires distincts entre les classes.
+
+Pour finir, on réalise des prédictions de classes sur le jeu de données de validation à l'aide du modèle AFD entraîné. Ensuite, on compare ces prédictions avec les véritables étiquettes du jeu de données, génère une matrice de confusion et calcule la précision du modèle. La précision est une mesure de l'exactitude du modèle dans la classification des sentiments dans le jeu de données de validation, et la matrice de confusion donne un aperçu détaillé des résultats des prédictions.
+
+```{r}
+# Prédire les classes sur le jeu de données de validation
+predictions_valid <- predict(lda_result_train, newdata = as.data.frame(pca_result_valid))$class
+
+# Comparer les prédictions avec les vraies étiquettes
+confusion_matrix <- table(predictions_valid, df_tfidf_valid_clean$Code_Sentiment)
+
+# Calculer la précision
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+cat("Précision du modèle sur le jeu de données de validation :", accuracy, "\n")
+
+print(confusion_matrix)
+```
+
+Comme pour le projet_1, nous aurions aimé avoir une accuracy supérieure. Cependant les données textuelles sont en général très compliquées à étudier. La dimentionalité des données textuelles peut être très élevée. Il nous faudrait des capacitées de calcul plus importantes que celles que nous avons sur nos PC. On dépend beaucoup de la qualité des données. Un gros prétraitement/ nettoyage des données est nécéssaire.

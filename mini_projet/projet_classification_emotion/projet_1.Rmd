@@ -1,0 +1,189 @@
+---
+title: "Projet 1"
+output: html_notebook
+---
+
+Amaury BODIN et Vincent BERNARD
+
+Résumé : Nous développerons un projet de classification bayésienne en utilisant l'ensemble de données sur les émotions (Kaggle) en plusieurs étapes. Nous allons employer une série de pré-traitement plus complexes et éventuellement étendre l'approche bayésienne pour inclure des ajustements (tuning) ou des probabilité supplémentaires.
+
+Objectif principal : Développer un classificateur bayésien pour prédire les émotions à partir de données textuelles.
+
+Source des données : Jeu de données sur les émotions. • Lien : Emotion Dataset (kaggle.com)
+
+Installation des packages nécessaires ainsi que néttoyage de l'environnement
+
+On nettoie l'environnement pour repartir sur de bases saines et ne pas avoir trop d'espace pris en mémoire.
+
+```{r}
+rm(list = ls())
+```
+
+Il faut installer les différents packages si ils ne le sont pas sur la machine. Puis les charger en utilisant library()
+
+```{r}
+#install.packages("kableExtra")
+#install.packages("e1071")
+#install.packages("ggplot2")
+```
+
+On importe le package kableExtra pour avoir une belle manière, une manière uniforme de présenter les tableaux dans ce RMarkdown.
+
+On utilisera le package 'e1071' pour avoir accès à des fonctions de classification bayesienne.
+
+On importe le package ggplot, au cas où on aurait besoin d'afficher des données, des graphes dans ce rapport.
+
+```{r}
+library(kableExtra)  
+library('e1071')
+library(ggplot2)
+```
+
+1- Chargement et exploration des données
+
+On peut voir dans ce dataset que chaque phrase est associé à une émotion. Il va donc falloir trouver un moyen de relier une phrase à une emotion.
+
+```{r}
+data <- read.csv("Emotion_classify_Data.csv")
+data %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+Grâce à la fonction summary(), on obtient des informations supplémentaires sur le dataset. Nottament, sur le nombre d'individus (nombre de lignes). On connait aussi le type des 2 colonnes (character), même si on pouvais s'en douter en visualisant les données.
+
+```{r}
+summary(data)
+```
+
+En temps normal on considère qu'il existe 6 émotions. Dans ce dataset seulement 3 sont considérées, ce qui devrait simplifier un peu plus les choses.
+
+```{r}
+unique(data$Emotion)
+```
+
+On s'intéresse au nombre "d'exemple" que chaque émotions possède. On constate que c'est plutôt équilibré, anger = 2000 lignes, fear=1937 lignes et joy= 2000 lignes.
+
+```{r}
+table(data$Emotion)
+```
+
+```{r}
+str(data)
+```
+
+Visualisation du nombre de caractères par phrase. Pour cela, on affiche par l'intermédiaire ggplot, un histogram qui représente le nombre de charactères par phrase dans la colonne 'Comment'. On peut voir que le nombre de charactères est très dispersé.
+
+```{r}
+ggplot(data, aes(x = nchar(Comment))) +
+  geom_histogram(binwidth = 20, fill = "lightblue", color = "black") +
+  theme_minimal()
+```
+
+2- Pré-traitement des données à l'aide de deux packages connus dans le milieu du prétraitement : 'tm', 'quanteda' et 'text'. Le package 'text' va nous permettre de nettoyer notre jeu de donnée comme demandé mais aussi d'enlever les mots vide de sens, tels que The, this, and , is etc qui ne font que ajouter des mots en plus qui ne sont pas utile car personne n'est capable de desceller une émotion à partir de ces mots. Il peuvent être présent dans chaque phrase. Les deux autres packages vont nous permettre de de faire la tokenisation et la lemmatization du jeu de donnée.
+
+De base nous étions partis sur l'utilisation du package stringr qui pouvait faire la même chose mais il fallait décrire tout les élements à la main ce qui est plus fastidieux.
+
+```{r}
+#install.packages("quanteda")
+#install.packages("text")
+```
+
+On décide de retirer la ponctuation car on considère qu'elle ne nous aidera pas à déterminer une émotion. On retire également les chiffre d'une phrase s'il y en a car on considère également qu'il n'ont pas d'utilité dans la détermination d'une émotion.
+
+Ensuite, nous retirons également les stopwords car comme expliqué précédemment. Les mots comme the, this, ... peuvent être présent dans chacune des phrases sans pour autant avoir un réel impact sur l'émotion car il peuvent être associés à tout mot.
+
+```{r}
+library(tm)
+library(quanteda)
+library(text)
+library(stringr)
+
+#data$Comment <- str_replace_all(data$Comment, "[^[:alnum:] ]", "")  
+#data$Comment <- str_replace_all(data$Comment, "\\b\\d+\\b", "")     
+#data$Comment <- str_replace_all(data$Comment, "(?i)\\b(?:this|is|the|and|etc)\\b", "")
+
+data$Comment <- removePunctuation(data$Comment)
+data$Comment <- removeNumbers(data$Comment)
+data$Comment <- removeWords(data$Comment, stopwords("en"))
+```
+
+Maintenant on va s'occuper de Lemmatiser, tokeniser et de faire la transformation TF-IDF ainsi que le passage de nouveau sous forme de dataframe.
+
+Ici, la tokenisation consiste à séparer un texte en petites unitées telle que des mots. La lemmisation elle, est le fait de retranscrire un mot "dérivé" en son mot d'orignine. Voici un exemple en francais : chantait devient chanter, ...
+
+En effet, on est obligé de faire cela car sinon lors de la classification bayesienne les mots seront automatiquement considérés comme totalement différents alors que pour autant ils signifient "la même chose".
+
+```{r}
+corpus <- corpus(data$Comment)
+
+#Tokenization
+tokens <- tokens(corpus)
+
+#Lemmatisation
+tokens <- tokens_wordstem(tokens)
+
+# Créer une matrice document-term ensuite TF-IDF
+dfm <- dfm(tokens)
+dfm_tfidf <- dfm_tfidf(dfm)
+
+df_tfidf <- cbind(emotion = data$Emotion, as.data.frame(as.matrix(dfm_tfidf)))
+```
+
+```{r}
+df_tfidf %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+df_tfidf est une représentation numérique des phrases avec les émotions en première colonne et les mots uniques du corpus en colonnes. Les valeurs indiquent l'importance de chaque mot dans chaque phrase mesurée par la fréquence inverse du document (TF-IDF), prête pour l'entraînement d'un modèle de classification bayésienne des émotions.
+
+3- Création et entrainement du modèle Bayésien
+
+On commence par séparer nos données en train set et test set. On a sélectionné une seed pour s'assurer que lorsqu'on réessaye l'entrainement du modèle, on ait les mêmes conditions initiales.
+
+```{r}
+#Pour que cela soit reproductible
+set.seed(1)
+
+sample <- sample(c(TRUE, FALSE), nrow(df_tfidf), replace = TRUE, prob = c(0.7, 0.3))
+train_data <- df_tfidf[sample, ]
+test_data <- df_tfidf[!sample, ]
+
+```
+
+Ensuite nous allons entraîner notre modèle baysien sur les train_data.
+
+En construisant le modèle, on précise que la variable à prédire est Emotion et que toutes les autres variables sont des variables prédictives.
+
+Ensuite, on effectue la prédiction sur les variables du test_data. On précise que le seuil de probabilité d'appartenir à une classe doit être supérieur à 0.3. En effet, on possède 3 classes (Joy, Anger et Fear). On a essayé avec un seuil plus élevé mais nous avions un taux d'erreurs supérieur donc nous avons gardé celui-là.
+
+```{r}
+naive_bayes_model <- naiveBayes(as.factor(emotion) ~ ., data = train_data)
+
+#Prédiction
+predictions <- predict(naive_bayes_model, test_data,threshold = 0.3)
+```
+
+4- Affichage des résulats du modèle :
+
+```{r}
+conf_matrix <- table(predictions, test_data$emotion)
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+precision <- diag(conf_matrix) / rowSums(conf_matrix)
+recall <- diag(conf_matrix) / colSums(conf_matrix)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", mean(precision, na.rm = TRUE), "\n")
+cat("Recall (Sensitivity):", mean(recall, na.rm = TRUE), "\n")
+cat("F1 Score:", mean(f1_score, na.rm = TRUE), "\n")
+
+print(conf_matrix)
+```
+
+On contate que l'accuracy n'est pas aussi bonne que ce qu'on aurait espéré. Ceci, peut s'expliquer par le fait que le model NaiveBayes est très simple. Le model NaiveBayes suppose l'indépendance conditionelle entre les différentes caractèristiques de notre dataset. Cependant, ce n'est pas forcément le cas.

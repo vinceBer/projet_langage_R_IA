@@ -1,0 +1,625 @@
+---
+title: "projet_final"
+output: html_document
+date: "2024-01-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Rapport projet final :
+
+Amaury BODIN et Vincent BERNARD
+
+## Introduction :
+
+L'ensemble de données permettant de détecter le texte généré par l'IA constitue un défi intéressant pour la classification bayésienne et l'analyse factorielle discriminante. Étant donné qu'il s'agit d'un challenge, d'un certain degrés de complexité et de liberté, on s'attend à ce qu'il y ait des fonctionnalités nuancées qui permettent de faire la différence entre le texte généré par l'homme et le texte généré par l'IA.
+
+## Objectifs :
+
+Développez un système de classification sophistiqué qui utilise des méthodes bayésiennes améliorées par des caractéristiques extraites par l'analyse factorielle discriminante pour faire la distinction entre le texte généré par l'homme et le texte généré par l'IA.
+
+Pour réaliser ce projet nous allons nous appuyer sur les données présentées sur kaggle pour le projet appellé "LLM-Detect".
+
+## 1. Chargement et exploration des données
+
+Il est toujours important de nettoyer l'espace de travail, pour travailler en espace plus sain avec uniquement les variables qui correspondent au projet.
+
+```{r}
+rm(list=ls())
+```
+
+On install les packages qu'on va utiliser pour le moment. Il est possible que d'autres packages soient installés au fur et à mesure si on se rend compte qu'on à besoin d'eux lors de ce Projet.
+
+```{r}
+#install.packages(c("kableExtra", "e1071", "ggplot2", "dplyr"))
+```
+
+Les librairies suivantes servent à :
+
+On importe le package kableExtra pour avoir une belle manière, une manière uniforme de présenter les tableaux dans ce RMarkdown.
+
+On utilisera le package 'e1071' mour avoir accées à des fonctions de classification bayesienne.
+
+On importe le package ggplot, au cas où on aurait besoin d'afficher des données, des graphes dans ce rapport.
+
+On importe égalemnt le package dplyr car il fourni des fonctions qui permettent de manipuler les données éfficacement.
+
+On utilisera aussi la librairie tm, elle fournit des méthodes pour manipuler plus facilment des données textuelles comme la création de corpus ou le nettoyage de texte.
+
+SnowballC est un package qui donne accées à des algorithmes de stemming pour plusieurs langues.
+
+stringr est un package conçu spécialement pour la manipulation de textes, pour les nettoyer.
+
+quanteta est un package qu'on a déjà utilisé dans les précédents mini-projets. Il founit égalment des méthodes pour la création de corpus, de prétraitement de textes, d'analyse de textes.
+
+Nous avons importé ces différents packages qui font parfois la même chose. Afin de testes les différentes méthode et déceler celle qui était la plus simple à mettre en place ou la plus efficace.
+
+```{r}
+library(kableExtra)  
+library('e1071')
+library(ggplot2)
+library(dplyr)
+
+library(tm)
+library(SnowballC)
+library(stringr)
+library(quanteda)
+```
+
+A présent on charge les données :
+
+```{r}
+#data_sample <- read.csv("sample_submission.csv")
+#data_test <- read.csv("test_essays.csv")
+data_train <- read.csv("train_essays.csv")
+data_prompts <- read.csv("train_prompts.csv")
+```
+
+Maintenant, on peut observer les différents datasets qui nous ont étés donnés :
+
+```{r}
+data_train %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+```{r}
+data_prompts %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On peut voir qu'on possède 2 datasets "principaux", l'un qui est un dataset d'entraînement dont les principales colonnnes sont "text" et "generated". Dans la colonne text on retrouve des textes qui on étés rédigés sur 2 sujets possibles soit "Car-free cities" soit "Does the electoral colledge work?". Et dans la colonne generated il y a l'information sur le fait que ce text ait été généré par une IA (1) ou pas (0).
+
+L'autre dataset, data_prompts, il indique les différents sujets de rédaction, les consignes ainsi que des textes sources.
+
+Dans ce projet, nous allons ici uniquement utiliser les 2 colonnes précisées dans le data_train. A savoir "text" et "generated", en effet notre but est de détecter si le texte a été généré par une IA ou non, sans tenir compte du sujet de rédaction ou quoi que ce soit d'autre.
+
+```{r}
+data_train %>%
+  group_by(prompt_id, generated) %>%
+  summarize(count = n())
+```
+
+Comme on peut le voir au-dessus, on a 2 sujets de texts. On peut également constater qu'on possède au total 3 textes générés par une IA alors qu'on en a au total 1375 qui ont étés générés par des personnes. On pourra donc voir par la suite que cela peut poser un problème.
+
+## 2. Extraction de charactéristiques
+
+On va essayer d'extraire de nouvelles variables pour avoir plus de matière en comparant les textes entre eux.
+
+Ainsi, on crée la variable "variabilité" (l'écart-type) de la longueur de chaque phrase pour chaque texte de la colonne "text" du dataframe data_train. En effet, dans l'un des articles qui nous avait été conseillés sur l'introduction à la sylométrie. On a constaté que Mendenhall avait mit en place une théorie qui indiquait que en moyenne si un être humain écrivait beaucoup alors une phrases auraient à peu près la même longueur dans chacun de ses textes.
+
+Même si l'article indique toutefois que cette technique n'était pas extrêmement efficace, elle peut avoir son utilité pour détecter la présence de l'écriture d'une IA. En effet, les textes ont une variabilité naturelle lorsqu'ils sont générés par des humains. Mais peuvent potentiellement présenter une régularité/ homogénéité dans la longeur de phrases lorsqu'il sagit d'IA.
+
+```{r}
+data_train$variabilite <- numeric(nrow(data_train))
+ 
+ for (i in seq_len(nrow(data_train))) {
+     phrases <- unlist(strsplit(data_train$text[i], "\\.\\s*"))
+     
+     longueurs <- nchar(phrases)
+     variabilite <- sd(longueurs)
+     data_train$variabilite[i] <- variabilite
+ }
+```
+
+On s'est également intéressé au nombre de mots d'un text. On s'est dit que des étudiants auraient tendance à écrire beaucoup plus qu'une IA sur un sujet donné. A utiliser peut être plus de ponctuation comme des virgules et des points. C'est pour cela qu'on a choisit d'ajouter des nouvelles features, qui sont le nimbre de points, le nombre de virgules et le nombre de mots.
+
+```{r}
+data_train$nombre_de_mots <- str_count(data_train$text, "\\w+")
+data_train$nombre_de_points <- str_count(data_train$text, "\\.")
+data_train$nombre_de_virgule <- str_count(data_train$text, "\\,")
+```
+
+On fait ensuite, une DFM qui est une matrice de fréquence des documents. Pour faire cela, on passe tout d'abord par un corpus qui est une collection de textes.
+
+Ensuite, on tokenise le corpus cela revient à diviser chaque document en petites unitées.
+
+Pour finir, on peut donc faire la DFM qui est une représentation matricielle dont les lignes sont les texts (documents) et les colonnes sont les tokens. On peut voir dans ces matrices, des valeurs, ces valeurs représentent la fréquence d'apparition d'un terme dans chaque document.
+
+```{r}
+corpus <- corpus(data_train, text_field = "text")
+tokens <- tokens(corpus)
+dfm <- dfm(tokens, tolower = TRUE)
+```
+
+Ici, on récupère pour chaque texte l'entropie puis la perpléxité. On calcul l'entropie et la perplexité par l'intermédiaire des formules présentes sur internet.
+
+On calcul l'entropie d'un texte à partir de la probabilité des mots. Pour faire simple, l'entropie à le but de calculer le niveau de désordre dans un texte.
+
+On calcul la perplexité, à partir de l'entropie puisqu'il s'agit du carré de celle-ci.
+
+```{r}
+entropy_values <- numeric()
+perplexity_values <- numeric()
+
+for (text in data_train$text) {
+
+  dfm <- dfm(corpus(text, text_field = "text"), tolower = TRUE)
+  prob_word <- (Matrix::rowSums(dfm) + 1) / (sum(Matrix::rowSums(dfm)) + ncol(dfm))
+
+  entropy <- -sum(prob_word * log2(prob_word))
+  perplexity <- 2^entropy
+  entropy_values <- c(entropy_values, entropy)
+  perplexity_values <- c(perplexity_values, perplexity)
+}
+
+data_train$entropy <- entropy_values
+data_train$perplexity <- perplexity_values
+```
+
+On s'est dit qu'il pouvait également y avoir une différence dans la longueur des mots. En effet, on peut penser que l'IA ou que l'homme ait tendance à utiliser des mots plus complexe (plus long) que l'autre.
+
+Pour se faire, on prend chaque textes qu'on divise en mots (on utilise un séparateur, l'espace. Puis ensuite on calcul la moyenne de la longueur de chaque mots d'un texte.
+
+Puis on ajoute donc cette nouvelle donnée dans le dataframe d'entrainement.
+
+```{r}
+calculate_average_word_length <- function(text) {
+  tokens <- unlist(strsplit(text, " "))  
+  average_length <- mean(nchar(tokens))   
+  return(average_length)
+}
+
+data_train$average_word_length <- sapply(data_train$text, calculate_average_word_length)
+
+
+```
+
+Nous ne l'avons pas encore fait, nous allons désormais nettoyer le jeu de données que nous avons. C'est la même fonction que nous avons utilisé lors des mini-projets précédents.
+
+Dans un premier temps, nous retirons la ponctuation. Ensuite, on s'assure que tous les textes sont entièrement rédigées en minuscule pour les mots soit considérés comme les même (exemple : Papa et papa sont les mêmes mots mais si on ne fait pas cette transformation alors ils seront considérés comme différents, ce qu'on ne veut pas).
+
+Si il y a des URLs, on les remplace par des chaines vides car les URLs en terme de mots ne signifient rien et sont par conséquent très difficile à traiter.
+
+Ensuite, on supprime tous les mots vides (the, this, ...), des mots qui n'ont pas énormément de sens car ils peuvent être présent dans n'importe quel type de phrases.
+
+Pour finir, avant de renvoyer le texte modifié, on effectue du stemming ce qui signifie qu'on ramène tous les mots à leur racine et ainsi il est plus facile de constater la présence de mêmes mots ou du même champ lexical dans des textes.
+
+```{r}
+preprocess <- function(text) {
+
+  text <- gsub("[[:punct:]]", " ", text)
+  text <- tolower(text)
+  text <- str_replace_all(text, "http\\S+|www\\S+|https\\S+", "")
+  text <- removeWords(text, stopwords("en"))
+#stemming avec snowballc
+  text <- wordStem(text, language = "english")
+  
+  return(text)
+}
+```
+
+On applique à présent sur les différents textes la fonction qu'on a créé juste au dessus.
+
+```{r}
+data_train$text <- sapply(data_train$text, preprocess)
+```
+
+On effectue la DFM, cette fois-ci ce n'est plus pour la conception de nouvelles features (variables/colonnes dans le data_train).
+
+On fait une DFM qui est une matrice de fréquence des documents. Pour faire cela, on passe tout d'abord par un corpus qui est une collection de texts.
+
+Ensuite, on tokenise le corpus cela revient à diviser chaque document en petites unitées (comme des mots).
+
+Pour finir, on peut donc faire la DFM qui est une représentation matricielle dont les lignes sont les texts (documents) et les colonnes sont les tokens. On peut voir dans ces matrices, des valeurs, ces valeurs représentent la fréquence d'apparition d'un terme dans chaque document.
+
+Après avoir réalisé la DFM, on convertit cette matrice en TF-IDF maintenant au lieu d'avoir une matrice de fréquence du document on possède une de fréquence globale sur l'ensemble des textes. C'est une methode qui permet d'obtenir l'importance d'un terme dans un document.
+
+Pour finir, on renvoit cette matrice à un dataframe. Chaque ligne du dataframe correspond à un texte, les colonnes désignent un terme.
+
+Les valeurs qui leur sont associés sonts les poids de la TF-IDF.
+
+```{r}
+corpus2 <- corpus(data_train, text_field = "text")
+tokens2 <- tokens(corpus)
+dfm2 <- dfm(tokens2, tolower = TRUE)
+dfm_tfidf <- dfm_tfidf(dfm2)
+data_tf <- as.data.frame(as.matrix(dfm_tfidf))
+```
+
+## 3. Analyse factorielle dicriminante (Réduction de dimensionalité)
+
+Ici, on élimine les termes qui apparaissent dans moins de 3 documents car on estime qu'il n'ont donc pas une importance capitale. Cela permet de réduire la dimensionalité et permet de se concentrer sur les termes plus spécifiques à certains documents. Les termes trop fréquents peuvent ne pas apporter beaucoup d'information qui est discriminante, en effet certains mots peuvent être présents dans chaque phase et ne pas donner réellement d'information.
+
+```{r}
+data_tf <-data_tf[sapply(data_tf, function(x) length(unique(x))) > 2]
+```
+
+On ajoute à la droite de data_tf les variables qu'on a définit comme importantes. Ce sont celles qu'on a ajouté au début (les nouvelles features : entropie, variabilité, nombre de mots, ....).
+
+```{r}
+data_var_importante <- data_train[, (ncol(data_train) - 7):ncol(data_train)]
+data_tf_for_lda <- cbind(data_tf,data_var_importante)
+```
+
+La librairie MASS possède des fonctions pour effectuer des analyses statistiques, de la régression linéaire mais aussi la fonction lda() qu'on va utiliser juste après pour faire une analyse discriminance linéaire.
+
+La librairie caret est une librairie pour faire de l'apprentissage automatique comme de la classification.
+
+```{r}
+library(MASS)
+library(caret)
+```
+
+Ci-dessous, on effectue une analyse discriminante linéaire.
+
+Dans un premier temps, on crée le modèle LDA dont la variable dépendante est generated (savoir si un texte est généré par une IA ou non). Les autres variables, variables indépendantes sont donc ainsi les autres variables.
+
+Le but est ici de séparer les groupes définis par la variable dépendante en faisant les combinaison linéaire des variables indépendantes.
+
+Dans lda_scores on "range" les valeurs de la fonction discriminante obtenue.
+
+Ensuite, on combine les variables importantes avec les scores obtenus par LDA.
+
+Pour finir, on utilise summary() qui résume le modèle LDA obtenu (valeurs propres, ...) .
+
+```{r}
+lda_model <- lda(generated ~ ., data = data_tf_for_lda)
+lda_scores <- predict(lda_model)$x
+df_for_bayes <- cbind(data_var_importante,lda_scores)
+summary(lda_model)
+```
+
+## 4. Entrainement du modèle bayésien
+
+On se prépare pour l'entrainement des données. Pour cela, on sépare les données en 2 catégories de manière aléatoire. On sépare les données qu'on a en 2 parties, données d'entrainement et en données de test (on en est conscient mais cela pourrait causer quelques problèmes quant à la présence et le nombre des textes générés par IA).
+
+On met 80% des données qu'on a dans le dataset d'apprentissage et les 20% restants dans le test.
+
+```{r}
+train_index <- sample(seq_len(nrow(df_for_bayes)), 0.8 * nrow(df_for_bayes))
+train_data <- df_for_bayes[train_index, ]
+test_data <- df_for_bayes[-train_index, ]
+```
+
+Ensuite, on utilise la fonction NaiveBayes du package e1071 pour construire notre modèle de classification.
+
+On procède de la manière suivante, on créé le modèle en précisant la variable à prédire soit "generated" en utilisant evidemment les données d'entrainement parce que si on met aussi nos données de test alors le test n'aura plus vraiment de valeur car il aura "déjà vu" les données.
+
+Et ensuite, on fait la prédiction sur les données de test en s'appuyant sur le modèle qui a été créé juste avant. On prédit si les textes ont été rédigés par une IA ou par un Humain.
+
+```{r}
+bayes_model <- naiveBayes(generated ~ ., data = train_data)
+predictions <- predict(bayes_model, newdata = test_data)
+```
+
+Ci-dessous, on évalue rapidement la performance du modèle en faisant une matrice de confusion. Elle compare les résultats prédits sur l'ensemble de test avec les vrais résultats pour justement voir si il y a eu des erreurs.
+
+On regarde l'accuracy, c'est "de manière générale" combien de cas ont étés bien placés.
+
+```{r}
+confusion_matrix <- table(predictions, test_data$generated)
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+
+confusion_matrix
+accuracy
+```
+
+Dans l'exemple que nous venons d'avoir ici (il est largement possible que vous ne tombier pas sur le même cas que nous car cela dépend de la répartition aléatoire des données), nous avons eu a prédire 1 text généré par une IA et 276 textes écrit par l'homme. Tous les textes ont bien étés classés et cela nous donné une accuracy de 100%. Cependant, pour voir si cela fonctionne réellement il faudrait avoir beaucoup de données (crées pas IA).
+
+## 5. Evaluation du modèle et résultats
+
+On évalue plus en détail en calculant l'accuracy, et d'autres facteurs qui peuvent être important pour étudier nos résultats.
+
+```{r}
+true_positive <- diag(confusion_matrix)
+false_positive <- colSums(confusion_matrix) - true_positive
+false_negative <- rowSums(confusion_matrix) - true_positive
+
+accuracy <- sum(true_positive) / sum(confusion_matrix)
+precision <- true_positive / (true_positive + false_positive)
+recall <- true_positive / (true_positive + false_negative)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1-score:", f1_score, "\n")
+```
+
+Cependant, dans le cas que nous avons obtenu (nous lorsqu'on a exécuté le code), nous n'avons pas de Faux positif ou faux négatif. Donc il est difficile d'aller plus loin dans l'analyse de nos résultats.
+
+## 6. Travaux futurs
+
+Dans le futur, il serait possible d'étudier les syllabes (n-gramme), ce que nous n'avons pas réussi à mettre en place car nous n'avons pas réussi à trouver des fonctions qui faisaient cela.
+
+Travailler sur un meilleur dataset. Nous vous en proposons un ci-dessous. Nous allons réutiliser le même code que précédemment mais cette fois-ci sur un autre dataset pour vérifier de manière plus certaine si ce que nous avons fait fonctionne. (c'est pourquoi nous allons pas recommenter le code mais seulement les résultats).
+
+Tout supprimer :
+
+```{r}
+rm(list=ls())
+```
+
+Imports :
+
+```{r}
+library(kableExtra)  
+library('e1071')
+library(ggplot2)
+library(dplyr)
+library(tm)
+library(SnowballC)
+library(stringr)
+library(quanteda)
+library(MASS)
+library(caret)
+```
+
+Import des données :
+
+On se limite au 1er dataset, pour ne pas avoir trop de données. Nous allons même sélectionner que 7 000 lignes.
+
+```{r}
+data_train <- read.csv("train_drcat_01.csv")
+#data_train_2 <- read.csv("train_drcat_02.csv")
+#data_train_3 <- read.csv("train_drcat_03.csv")
+#data_train_4 <- read.csv("train_drcat_04.csv")
+```
+
+```{r}
+nrow(data_train) # tous on entre 33 000 et 44 000 lignes (colonnes text et label)
+```
+
+```{r}
+data_train %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On remarque qu'il y a un soucis avec les rows a partir de la ligne 3000 du dataset, pour ne pas compliquer les choses et ne pas fausser tout nos résulstat à cause de lignes inutiles on décide de seulement garder les 3000 premières lignes ou on est sur qu'elles sont bien.
+
+```{r}
+data_train <- data_train[1:3000, ]
+```
+
+```{r}
+colnames(data_train)[colnames(data_train) == "label"] <- "generated"
+```
+
+```{r}
+removeNonASCII <- function(text) {
+  text <- iconv(text, to = "ASCII", sub = " ")
+  return(text)
+}
+data_train$text <- sapply(data_train$text, removeNonASCII)
+```
+
+```{r}
+data_train %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+```{r}
+par_humain <- sum(data_train$generated == 0)
+par_IA <- sum(data_train$generated == 1)
+
+cat("Nombre de lignes où generated = 0 :", par_humain, "\n")
+cat("Nombre de lignes où generated = 1 :", par_IA, "\n")
+```
+
+```{r}
+lignes_dupliquees <- duplicated(data_train)
+
+cat("Indices des lignes dupliquées :", which(lignes_dupliquees), "\n")
+
+if (any(lignes_dupliquees)) {
+  cat("Il y a des lignes dupliquées.\n")
+} else {
+  cat("Aucune ligne dupliquée.\n")
+}
+```
+
+```{r}
+data_train %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+Création des nouvelles features :\
+Prend beaucoup de temps à run + flooding de la console
+
+```{r}
+data_train$variabilite <- numeric(nrow(data_train))
+ 
+ for (i in seq_len(nrow(data_train))) {
+     phrases <- unlist(strsplit(data_train$text[i], "\\.\\s*"))
+     
+     longueurs <- nchar(phrases)
+     variabilite <- sd(longueurs)
+     data_train$variabilite[i] <- variabilite
+ }
+```
+
+```{r}
+data_train$nombre_de_mots <- str_count(data_train$text, "\\w+")
+data_train$nombre_de_points <- str_count(data_train$text, "\\.")
+data_train$nombre_de_virgule <- str_count(data_train$text, "\\,")
+```
+
+```{r}
+corpus <- corpus(data_train, text_field = "text")
+tokens <- tokens(corpus)
+dfm <- dfm(tokens, tolower = TRUE)
+```
+
+```{r}
+entropy_values <- numeric()
+perplexity_values <- numeric()
+
+for (text in data_train$text) {
+
+  dfm <- dfm(corpus(text, text_field = "text"), tolower = TRUE)
+  prob_word <- (Matrix::rowSums(dfm) + 1) / (sum(Matrix::rowSums(dfm)) + ncol(dfm))
+
+  entropy <- -sum(prob_word * log2(prob_word))
+  perplexity <- 2^entropy
+  entropy_values <- c(entropy_values, entropy)
+  perplexity_values <- c(perplexity_values, perplexity)
+}
+
+data_train$entropy <- entropy_values
+data_train$perplexity <- perplexity_values
+```
+
+```{r}
+calculate_average_word_length <- function(text) {
+  tokens <- unlist(strsplit(text, " "))  
+  average_length <- mean(nchar(tokens))  
+  return(average_length)
+}
+
+data_train$average_word_length <- sapply(data_train$text, calculate_average_word_length)
+```
+
+```{r}
+preprocess <- function(text) {
+
+  text <- gsub("[[:punct:]]", " ", text)
+  text <- tolower(text)
+  text <- str_replace_all(text, "http\\S+|www\\S+|https\\S+", "")
+  text <- removeWords(text, stopwords("en"))
+#stemming avec snowballc
+  text <- wordStem(text, language = "english")
+  
+  return(text)
+}
+```
+
+```{r}
+data_train$text <- sapply(data_train$text, preprocess)
+```
+
+TF-IDF :
+
+```{r}
+corpus2 <- corpus(data_train, text_field = "text")
+tokens2 <- tokens(corpus)
+dfm2 <- dfm(tokens2, tolower = TRUE)
+dfm_tfidf <- dfm_tfidf(dfm2)
+data_tf <- as.data.frame(as.matrix(dfm_tfidf))
+```
+
+On supprime toutes les variables qui nous intéressent plus à ce stade :
+
+```{r}
+conserver <- c("data_train", "data_tf")
+
+variables <- ls()
+
+supprimer <- setdiff(variables, conserver)
+
+rm(list = supprimer)
+```
+
+Analyse factorielle discriminante :
+
+```{r}
+data_tf <-data_tf[sapply(data_tf, function(x) length(unique(x))) > 2]
+```
+
+```{r}
+#data_var_importante <- data_train[, (ncol(data_train) - 7):ncol(data_train)]
+# Créer un dataframe contenant plusieurs colonnes
+data_var_importante <- data.frame(
+  generated = data_train$generated,
+  variabilite = data_train$variabilite,
+  nombre_de_mots = data_train$nombre_de_mots,
+  nombre_de_points = data_train$nombre_de_points,
+  nombre_de_virgule = data_train$nombre_de_virgule,
+  perplexity = data_train$perplexity,
+  average_word_length = data_train$average_word_length
+)
+
+
+data_tf_for_lda <- cbind(data_tf,data_var_importante)
+```
+
+```{r}
+data_tf_for_lda <- data_tf_for_lda[complete.cases(data_tf_for_lda), ]
+data_var_importante <- data_var_importante[complete.cases(data_var_importante), ]
+```
+
+```{r}
+lda_model <- lda(generated ~ ., data = data_tf_for_lda)
+lda_scores <- predict(lda_model)$x
+df_for_bayes <- cbind(data_var_importante,lda_scores)
+summary(lda_model)
+```
+
+Entrainement du modèle Bayessien/prediction :
+
+```{r}
+train_index <- sample(seq_len(nrow(df_for_bayes)), 0.8 * nrow(df_for_bayes))
+train_data <- df_for_bayes[train_index, ]
+test_data <- df_for_bayes[-train_index, ]
+```
+
+```{r}
+bayes_model <- naiveBayes(generated ~ ., data = train_data)
+predictions <- predict(bayes_model, newdata = test_data)
+```
+
+Evaluation du modèle :
+
+```{r}
+confusion_matrix <- table(predictions, test_data$generated)
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+
+confusion_matrix
+accuracy
+```
+
+```{r}
+true_positive <- diag(confusion_matrix)
+false_positive <- colSums(confusion_matrix) - true_positive
+false_negative <- rowSums(confusion_matrix) - true_positive
+
+accuracy <- sum(true_positive) / sum(confusion_matrix)
+precision <- true_positive / (true_positive + false_positive)
+recall <- true_positive / (true_positive + false_negative)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1-score:", f1_score, "\n")
+```
+
+On peut donc le voir avec ce second dataset, on obtient égalment des résultats très concluent avec très peu d'erreurs. Ce dataset est beaucoup plus représentatif qu'avec le dataset original.
+
+On en conclut alors que les idées de traitements de textes et les différentes manipulations de texte ont bien fonctionnées.

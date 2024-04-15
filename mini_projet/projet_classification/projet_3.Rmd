@@ -1,0 +1,427 @@
+---
+title: "Projet3"
+output: html_notebook
+---
+
+Amaury BODIN et Vincent BERNARD
+
+Résumé : Le jeu de données contient des informations sur les thèses de doctorat françaises, en mettant l'accent sur la similarité sémantique. Cela représente un défi unique pour la classification en raison de la nature textuelle et sémantique des données. Objectif principal : Mettre en place une classification bayésienne avancée avec analyse discriminante sur un jeu de données de résumés de thèses de doctorat françaises afin de les catégoriser en domaines d'étude. Source des données : Recherche de similarité sémantique de thèse de doctorat française à partir de Kaggle.\
+
+On nettoie l'environnement pour repartir sur des bases saines et ne pas avoir trop d'espace pris en mémoire.
+
+```{r}
+rm(list = ls())
+```
+
+```{r}
+#install.packages(c("kableExtra", "e1071", "ggplot2", "dplyr"))
+```
+
+On importe le package kableExtra pour avoir une belle manière, une manière uniforme de présenter les tableaux dans ce RMarkdown.
+
+On utilisera le package 'e1071' pour avoir accès à des fonctions de classification bayesienne.
+
+On importe le package ggplot, au cas où on aurait besoin d'afficher des données, des graphes dans ce rapport.
+
+On importe égalemnt le package dplyr car il fourni des fonctions qui permettent de manipuler les données efficacement.
+
+```{r}
+library(kableExtra)  
+library('e1071')
+library(ggplot2)
+library(dplyr)
+```
+
+1 - Chargement des données de Kaggle
+
+On importe les données du dataset que l'on va utiliser puis on regarde à quoi ressemble le dataset que nous allons utiliser.
+
+Ci-dessous, on peut voir que le dataset possède 7 colonnes.
+
+```{r}
+data <- read.csv("french_thesis_20231021_metadata.csv")
+colnames(data)
+```
+
+```{r}
+data %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On peut voir, ci-dessous que le dataset possède 519 578 lignes, que chaque colonne est de type caracter.
+
+```{r}
+summary(data)
+```
+
+On va ici, venir combiner le titre, l'auteur et la description ensemble car beaucoup de lignes ou thèses n'ont pas de description. Ce qui devrait aussi nous aider a grouper les thèses qui possèdent le même auteur, car même auteur peut aussi vouloir dire même domaine d'activité et de recherche.
+
+```{r}
+data$Extended_Description <- paste(data$Title, data$Author, sep = " ")
+```
+
+Ou alors on peut venir chercher la description complète du projet sur internet via l'url mais dans la plupart des cas l'url n'apporte pas plus d'information.
+
+```{r}
+#data['Description'].fillna('', inplace=True)
+#data['URL'] = "https://www.theses.fr/" + data['URL']
+```
+
+```{r}
+data %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+Pré-traitement des données :
+
+Il faut installer ces packages s'ils ne sont pas déjà présents sur la machine.
+
+```{r}
+# install.packages(c("tm", "SnowballC", "stringr", "quanteda"))
+```
+
+On importe tm car il est utile pour le traitement des données tecxtuelles. On l'utilise en général pour le prétraitement de texte comme la tokenisation, la lemmisation ou encore la création de corpus de textes.
+
+SnowballC donne des outils de stemming pour réduire un mot en sa racine.
+
+stringr est très utilisé pour faire des manipulations de chaines de caractères. Extraire des motifs (patterns) dans une chaine de charactères, et tout autres types de manipulations de chaines de charactères.
+
+quanteta, a été créée pour l'analyse de données de textes.
+
+On a trouvé ces ces libraries sur internet en cherchant des moyen de faire ce qu'on souhaitait.
+
+```{r}
+#install.packages("tm")
+```
+
+```{r}
+library(tm)
+library(SnowballC)
+library(stringr)
+library(quanteda)
+```
+
+On va venir ici réduire la taille de notre jeu de donnée car les ordinateurs portables n'ont souvent que 156 Go de ram et surtout même si la ram n'était pas un problème devoir attendre plusieurs heures à chaque étape le temps que toutes les données soient prisent en compte n'est pas concevable. C'est pour cela que l'on a choisit un petit nombre au début, que l'on puisse faire nos tests et voir si notre code fonctionnait assez rapidement.
+
+```{r}
+set.seed(123)
+indices_echantillon = sample(nrow(data), size = 15000) 
+data_echantillon = data[indices_echantillon, ]
+```
+
+Avant de commencer on va vérifier que les Domaines sont utilisables pour la prédiction. Malheuresement, on voit que pour l'échantillion séléctionné il y a trop de domaine différent par rapport au nombre de ligne, il risque donc d'être très dur de faire des regroupements et de trouver des points communs aux valeurs.
+
+```{r}
+length(unique(data_echantillon$Domain))
+```
+
+```{r}
+#data_echantillon$Domain <- sapply(data_echantillon$Domain, preprocess)
+#length(unique(data_echantillon$Domain))
+```
+
+Même en essayant d'appliquer des méthodes pour nettoyer les domaines, il reste tout de même un trop grand nombre de domaines différent par rapport aux nombres de ligne utilisées.
+
+Le code prèsent en dessous trouve les 10 domaines les plus présents dans la colonne Domaine du dataframe_echantillon. Ensuite, on crée donc un nouveau dataframe dans lequel on met les "lignes" associées à ces 10 domaines.
+
+On visualise par ailleurs les 10 domaines les plus présentes dans notre situation.
+
+```{r}
+top10 <- data_echantillon %>%
+  count(Domain) %>%
+  arrange(desc(n)) %>%
+  slice(1:10) %>%
+  pull(Domain)
+
+print(top10)
+
+df1 <- data_echantillon %>%
+  filter(Domain %in% top10)
+
+```
+
+```{r}
+df1 %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On peut donc maintenant partir d'une meilleure base avec des domaines bien plus clair et en moins grand nombre.
+
+Nous pouvons donc passer au pré-traitement de la description allongée que nous avons créée pour, en gardant seulement les éléments important.
+
+La fonction preprocess retire tous les signes de ponctuation d'un texte. On met le texte en minuscule, on retire tous les URLs, on retire les mots vides en francais et en anglais (les mots qui n'ont pas d'importance dans une phrase. Et pour fininr, avant de renvoyer un texte on applique du stemming sur les mots. C'est-à-dire qu'on garde uniquement la racine d'un mot par exemple : 'running' deveint 'run'
+
+```{r}
+preprocess <- function(text) {
+
+  text <- gsub("[[:punct:]]", " ", text)
+  text <- tolower(text)
+  text <- str_replace_all(text, "http\\S+|www\\S+|https\\S+", "")
+  text <- removeWords(text, stopwords("fr"))
+  text <- removeWords(text, stopwords("en"))
+#stemming avec snowballc
+  text <- wordStem(text, language = "french")
+  text <- wordStem(text, language = "english")
+  
+  return(text)
+}
+```
+
+On change la colonne Extended_Description en appliquant dessus la fonction qui a été crée juste au dessus.
+
+```{r}
+df1$Extended_Description <- sapply(df1$Extended_Description, preprocess)
+```
+
+On visualise ces changement pour s'assurer qu'ils ont bien été effectués.
+
+```{r}
+df1$Extended_Description %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+Vectorisation des données avec la TF-IDF, pour donner une valeur à chaque mot, nous permettant plus tard de savoir leur poids et donc de réaliser une meilleur classification.
+
+On prépare des données textuelles pour les utiliser en apprentissage automatique. Pour cela, on crée une matrice fréquence de documents aussi appellée DFM qui est pondérée par une TF-IDF à partir d'un corpus de texte qu'on crée.
+
+```{r}
+corpus <- corpus(df1, text_field = "Extended_Description")
+tokens <- tokens(corpus)
+dfm <- dfm(tokens, tolower = TRUE)
+dfm_tfidf <- dfm_tfidf(dfm)
+
+data_tf <- as.data.frame(as.matrix(dfm_tfidf))
+```
+
+On visualise maintenant le nouveau dataframe créé.
+
+```{r}
+data_tf %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On va maintenant venir transformer nos domaines en numérique pour que la variables domaine puissent passer dans les modèles.
+
+```{r}
+df1$Code_domain <- as.numeric(factor(df1$Domain))
+data_tf$Code_domain <- df1$Code_domain
+```
+
+Extraction des caractéristiques et modélisation des Rubriques LDA :
+
+On utilise topicmodels car il est utile pour l'analyse de sujets. Il aide à identifier des sujets qui reviennent dans un ensemble de documents. Cette librarie permet d'utiliser des modèles LDA.
+
+La bibliothèque slam nous permet de travailler plus simplement avec des matrices creuses. C'est une librarie qui est apparement très utilisée pour l'analyse de sujets, elle permet des calculs efficaces sur des vecteurs. .
+
+Et la librairie matrice fournit des méthodes qui optimisent le travail et les calculs avec des matrices.
+
+```{r}
+#install.packages(c("topicmodels", "slam", "Matrix"))
+```
+
+```{r}
+library(topicmodels)
+library(slam)
+library(Matrix)
+```
+
+Ce code utilise le modèle LDA pour découvrir des thèmes dans les résumés de thèses. La ligne **`lda_model <- LDA(dfm, k = 10)`** applique l'algorithme LDA avec l'objectif de déterminer 10 sujets distincts. Ensuite, la distribution des sujets pour chaque document est extraite, montrant comment chaque thèse est répartie entre les sujets identifiés. Ces distributions sont ajoutées en tant que nouvelles caractéristiques au dataframe existant (**`data_tf`**). Enfin, les termes les plus fréquents associés à chaque sujet sont affichés, fournissant un aperçu des mots clés liés à chaque thème. Ce processus global permet d'explorer et de comprendre les principaux thèmes présents dans les résumés de thèses à l'aide de l'analyse LDA.
+
+On essaie de prendre plus de topics que l'on a de domaine pour que notre modèle plus tard ait une plus grande marge de manoeuvre. Ce que l'on veut dire par là est que si il n'y a que 10 topics et que le même topics est affecté plusieurs fois a deux domaines différents cela peut poser problème lors de l'apprentissage, alors que là avec plus de topics les chances de mauvaise associations de topics à répétitions sont plus basses !
+
+```{r}
+lda_model <- LDA(dfm, k = 20)
+
+distri_rubrique <- as.matrix(topics(lda_model))
+data_tf_lda <- cbind(data_tf, distri_rubrique)
+
+terms(lda_model)
+```
+
+Cette tentative de regroupement nous permet d'avoir une variable en plus pour prédire a quel domain appartient chaque description et donc chaque thèse.
+
+```{r}
+#install.packages(c("MASS", "caret"))
+```
+
+La librairie MASS donne accès à de nombreuses fonctions statistiques et méthodes d'ajustement de modèles. Régression Linéaire, analyse discriminante, analyse de variance, ...
+
+Caret (classification and regression training) est une librairei qui permet de faire de la création, comparaison et évaluation de modèles de classification et de régression.
+
+```{r}
+library(MASS)
+library(caret)
+```
+
+Avant cela on va venir enlever les variables dont les valeurs de la colonnes sont uniques, donc celle qui ne présentent pas de variabilités. Ceci devrait nous permettre de réduire la dimensionalité de notre dataset et donc sûrement améliorer la précision de notre modèle LDA.
+
+```{r}
+data_tf_lda <-data_tf_lda[sapply(data_tf_lda, function(x) length(unique(x))) > 2]
+```
+
+On va maintenant pouvoir passer à la création du model LDA, mais avant cela on doit ajouter la colonne Code_Domain à data_tf_lda car c'est la colonne que l'on va devoir prédire
+
+```{r}
+data_tf_lda$Code_domain <- df1$Code_domain
+```
+
+On vient maintenant faire le modèle et ajouter les prédictions dans un dataframe qui sera lui utiliser pour faire les prédictions finale à l'aide d'un modèle Bayésien.
+
+```{r}
+reduc_lda_model <- lda(Code_domain ~ ., data = data_tf_lda)
+lda_scores <- predict(reduc_lda_model)$x
+df_for_bayes <- cbind(data_tf_lda,lda_scores)
+summary(lda_model)
+```
+
+On va maintenant faire le modèle bayésien en séparant notre jeux de données pour pouvoir faire des entrainement puis faire les tests.
+
+```{r}
+train_index <- sample(seq_len(nrow(df_for_bayes)), 0.8 * nrow(df_for_bayes))
+train_data <- df_for_bayes[train_index, ]
+test_data <- df_for_bayes[-train_index, ]
+
+train_data <- train_data[, (ncol(train_data) - 10):ncol(train_data)]
+test_data <- test_data[, (ncol(test_data) - 10):ncol(test_data)]
+
+train_data$Code_domain <- as.factor(train_data$Code_domain)
+test_data$Code_domain <- as.factor(test_data$Code_domain)
+```
+
+Ici, on utilise le modèle NaiveBayes pour entrainer un modèle sur notre dataset d'entrainement.
+
+Ensuite, à l'aide de ce modèle on fait la sur les données de test.
+
+```{r}
+bayes_model <- naiveBayes(Code_domain ~ ., data = train_data)
+predictions <- predict(bayes_model, newdata = test_data)
+```
+
+On va maintenant faire une première évaluation du modèle. On affiche la matrice de confusion :
+
+```{r}
+confusion_matrix <- table(predictions, test_data$Code_domain)
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+
+confusion_matrix %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On affiche l'accuracy de modèle :
+
+```{r}
+accuracy %>%
+  head() %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE,
+                position = "center")
+```
+
+On passe maintenant à la vérification de notre modèle mais d'abord on vérifie la répartition des domaines pour essayer de comprendre notre matrice de confusion.
+
+```{r}
+library(ggplot2)
+
+ggplot(train_data, aes(x = Code_domain)) +
+  geom_bar() +
+  labs(title = "Code_domain dans train_data", x = "Code_domain", y = "Nombre")
+```
+
+```{r}
+ggplot(test_data, aes(x = Code_domain)) +
+  geom_bar() +
+  labs(title = "Code_domain dans train_data", x = "Code_domain", y = "Nombre")
+```
+
+Utilsation de GridSearch pour vérifier la meilleure version du modèle (<https://search.r-project.org/CRAN/refmans/NMOF/html/gridSearch.html>)
+
+Installer le package suivant si il n'est pas présent.
+
+```{r}
+#install.packages("NMOF")
+```
+
+La librairie NMOF est utile car elle offre des outils pour résoudre des prblèmes doptimisation, d'allocation de ressources, ...
+
+```{r}
+library(NMOF)
+```
+
+```{r}
+objective_function <- function(smoothing, ...) {
+  bayes_modelGrid <- naiveBayes(Code_domain ~ ., data = train_data, laplace = smoothing)
+  predictions <- predict(bayes_modelGrid, newdata = test_data)
+  accuracy <- sum(predictions == test_data$Code_domain) / nrow(test_data)
+  
+  return(-accuracy)  
+}
+
+levels <- levels(train_data$Code_domain)
+
+result <- gridSearch(fun = objective_function,lower =1,upper = 10, n = 10)
+print(result)
+```
+
+On remarque ici que cela ne change absolument rien, presque à ce demander si cela marche vraiment. On a pu lire à plusieurs endroits que le Naive Bayes n'avait pas assez de paramètre pour que le gridSearch soit efficace, c'est peut-être pour cela que l'on trouve la même chose que le modèle de base. Nous allons donc essayer une autre approche du grid search, cette fois combinée avec la cross validation directement.
+
+```{r}
+library(e1071)
+
+laplace_values <- seq(0, 3, by = 0.1)
+
+results <- data.frame(laplace = laplace_values, accuracy = numeric(length(laplace_values)))
+
+for (i in seq_along(laplace_values)) {
+  bayes_model <- naiveBayes(Code_domain ~ ., data = train_data, laplace = laplace_values[i])
+  predictions <- predict(bayes_model, newdata = test_data)
+
+  confusion_matrix <- table(predictions, test_data$Code_domain)
+  accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+  results$accuracy[i] <- accuracy
+}
+
+print(results)
+
+```
+
+Après ces deux essaies il est bon de conclure que nous avons déjà la meilleure version de notre modèle. On va maintenant pouvoir reprendre les prédictions de notre modèle et vérifier toutes les données métriques.
+
+```{r}
+true_positive <- diag(confusion_matrix)
+false_positive <- colSums(confusion_matrix) - true_positive
+false_negative <- rowSums(confusion_matrix) - true_positive
+
+accuracy <- sum(true_positive) / sum(confusion_matrix)
+precision <- true_positive / (true_positive + false_positive)
+recall <- true_positive / (true_positive + false_negative)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1-score:", f1_score, "\n")
+```
+
+```{r}
+bayes_model
+```
+
+Encore une fois, nous nous rendons compte à quel point il est difficile d'obtenir une accuracy exceptionnelle. Au début de l'unitée nous pensions qu'il serait possible d'aller chercher des accuracy de plus de 95%. Comme ce dont on avait été habitué dans d'autres matières alors que pas du tout. On se rend compte que les données textuelles sont extrêmement difficiles à manipuler. Il faut faire des prétraitements précis et essayer de penser à tous les cas de figure. Ce qui est assez difficile.
